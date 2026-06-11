@@ -43,12 +43,21 @@ The original three exams ship with 320 seeded questions each. Additional exams s
 
 ## Screenshots
 
-Place screenshots here after deployment:
+### Dashboard with exam cards
 
-- `docs/screenshots/dashboard.png`
-- `docs/screenshots/practice.png`
-- `docs/screenshots/results.png`
-- `docs/screenshots/admin-review.png`
+![Dashboard with exam cards](screenshots/dashboard.png)
+
+### Exam detail page
+
+![Exam detail page](screenshots/exam-detail.png)
+
+### Active question screen
+
+![Active question screen](screenshots/active-question.png)
+
+### Results screen
+
+![Results screen](screenshots/results.png)
 
 ## Quickstart
 
