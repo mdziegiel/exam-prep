@@ -53,11 +53,9 @@ class RefreshIn(BaseModel):
 
 
 def ensure_ready():
-    init_db()
-    with connect() as conn:
-        count = conn.execute('SELECT COUNT(*) c FROM exams').fetchone()['c']
-    if count == 0:
-        seed()
+    # Seed is idempotent. Run it on startup so existing persistent databases receive
+    # newly supported exams/objectives without manual migrations.
+    seed()
 
 @app.on_event('startup')
 def startup():
@@ -134,12 +132,22 @@ def progress(exam_id: str):
         return [dict(r) for r in rows]
 
 @app.get('/api/exams/{exam_id}/queue')
-def queue(exam_id: str, limit: int = Query(10, ge=1, le=100), mode: str = 'practice'):
+def queue(exam_id: str, limit: int = Query(10, ge=1, le=100), mode: str = 'practice', ids: Optional[str] = None):
     order = 'RANDOM()' if mode == 'timed' else 'datetime(p.next_due) ASC, p.mastery ASC, q.difficulty DESC'
     with connect() as conn:
-        rows = conn.execute(f'''SELECT q.*, o.code objective_code, o.title objective_title, p.flagged, p.mastery
-            FROM questions q JOIN objectives o ON o.id=q.objective_id JOIN progress p ON p.question_id=q.id
-            WHERE q.exam_id=? AND q.active=1 AND q.verified=1 ORDER BY {order} LIMIT ?''', (exam_id, limit)).fetchall()
+        if ids:
+            wanted = [int(x) for x in ids.split(',') if x.strip().isdigit()]
+            if not wanted:
+                return []
+            placeholders = ','.join('?' for _ in wanted)
+            rows = conn.execute(f'''SELECT q.*, o.code objective_code, o.title objective_title, p.flagged, p.mastery
+                FROM questions q JOIN objectives o ON o.id=q.objective_id JOIN progress p ON p.question_id=q.id
+                WHERE q.exam_id=? AND q.active=1 AND q.verified=1 AND q.id IN ({placeholders})
+                ORDER BY CASE q.id {' '.join(f'WHEN {qid} THEN {i}' for i, qid in enumerate(wanted))} END''', [exam_id, *wanted]).fetchall()
+        else:
+            rows = conn.execute(f'''SELECT q.*, o.code objective_code, o.title objective_title, p.flagged, p.mastery
+                FROM questions q JOIN objectives o ON o.id=q.objective_id JOIN progress p ON p.question_id=q.id
+                WHERE q.exam_id=? AND q.active=1 AND q.verified=1 ORDER BY {order} LIMIT ?''', (exam_id, limit)).fetchall()
         return [serialize_question(r) for r in rows]
 
 @app.post('/api/answer')
@@ -175,22 +183,45 @@ def flag(question_id: int):
 @app.post('/api/attempts')
 def save_attempt(payload: AttemptIn):
     with connect() as conn:
+        exam = conn.execute('SELECT passing_score FROM exams WHERE id=?', (payload.exam_id,)).fetchone()
+        if not exam:
+            raise HTTPException(404, 'Exam not found')
         total = len(payload.answers)
         correct = 0
         breakdown: dict[str, dict[str, Any]] = {}
+        wrong_questions = []
         for ans in payload.answers:
-            row = conn.execute('SELECT q.correct_choice, o.code, o.title FROM questions q JOIN objectives o ON o.id=q.objective_id WHERE q.id=?', (ans.question_id,)).fetchone()
+            row = conn.execute('''SELECT q.id, q.question_text, q.choices_json, q.correct_choice, q.explanation, o.code, o.title
+                FROM questions q JOIN objectives o ON o.id=q.objective_id WHERE q.id=?''', (ans.question_id,)).fetchone()
             if not row:
                 continue
+            choices = json.loads(row['choices_json'])
+            selected = ans.selected_choice.upper()
             b = breakdown.setdefault(row['code'], {'title': row['title'], 'correct': 0, 'total': 0})
             b['total'] += 1
-            if ans.selected_choice.upper() == row['correct_choice']:
+            if selected == row['correct_choice']:
                 correct += 1; b['correct'] += 1
+            else:
+                def choice_text(letter):
+                    idx = ord(letter) - 65
+                    return choices[idx] if 0 <= idx < len(choices) else ''
+                wrong_questions.append({
+                    'id': row['id'],
+                    'question_text': row['question_text'],
+                    'objective_code': row['code'],
+                    'objective_title': row['title'],
+                    'selected_choice': selected,
+                    'selected_text': choice_text(selected),
+                    'correct_choice': row['correct_choice'],
+                    'correct_text': choice_text(row['correct_choice']),
+                    'explanation': row['explanation'],
+                })
         score = round((correct / total) * 100, 1) if total else 0
-        passed = score >= 70
+        passing_score = exam['passing_score']
+        passed = score >= passing_score
         cur = conn.execute('INSERT INTO attempts(exam_id,mode,score,passed,correct,total,time_taken_seconds,breakdown_json) VALUES(?,?,?,?,?,?,?,?)',
                            (payload.exam_id, payload.mode, score, int(passed), correct, total, payload.time_taken_seconds, json.dumps(breakdown)))
-        return {'id': cur.lastrowid, 'score': score, 'passed': passed, 'correct': correct, 'total': total, 'breakdown': breakdown}
+        return {'id': cur.lastrowid, 'exam_id': payload.exam_id, 'mode': payload.mode, 'score': score, 'passing_score': passing_score, 'passed': passed, 'correct': correct, 'total': total, 'time_taken_seconds': payload.time_taken_seconds, 'breakdown': breakdown, 'wrong_questions': wrong_questions}
 
 @app.get('/api/attempts')
 def attempts(exam_id: Optional[str] = None):

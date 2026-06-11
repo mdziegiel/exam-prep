@@ -7,8 +7,15 @@ A polished, self-hosted IT certification exam preparation application for seriou
 - MD-102 Microsoft Endpoint Administrator
 - AZ-104 Azure Administrator Associate
 - CompTIA Network+ N10-009
+- CompTIA A+ Core 1 220-1101
+- CompTIA A+ Core 2 220-1102
+- CompTIA Security+ SY0-701
+- CompTIA Linux+ XK0-005
+- SC-300 Identity and Access Administrator
+- AZ-700 Azure Network Engineer
+- MS-102 Microsoft 365 Administrator
 
-Each exam ships with a SQLite-backed starter bank of 320 questions mapped to exam objectives. Questions are structured for spaced repetition and can be expanded through manual import, community scraping, and Claude-generated candidates.
+The original three exams ship with 320 seeded questions each. Additional exams ship with 60 seeded starter questions each and the same review/generation pipeline for expansion. Questions are mapped to exam objectives and structured for spaced repetition.
 
 ## Features
 
