@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import os
 import random
@@ -12,6 +13,7 @@ import requests
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
@@ -131,9 +133,116 @@ def progress(exam_id: str):
             WHERE o.exam_id=? AND q.active=1 AND q.verified=1 GROUP BY o.id ORDER BY o.code''', (exam_id,)).fetchall()
         return [dict(r) for r in rows]
 
+
+def pdf_escape(text: str) -> str:
+    return str(text).replace('\\', '\\\\').replace('(', r'\(').replace(')', r'\)')
+
+def wrap_pdf_text(text: str, width: int = 92) -> list[str]:
+    words = re.sub(r'\s+', ' ', str(text)).strip().split(' ')
+    lines: list[str] = []
+    line = ''
+    for word in words:
+        candidate = f'{line} {word}'.strip()
+        if len(candidate) > width and line:
+            lines.append(line)
+            line = word
+        else:
+            line = candidate
+    if line:
+        lines.append(line)
+    return lines or ['']
+
+def build_question_bank_pdf(exam: sqlite3.Row, questions: list[sqlite3.Row]) -> bytes:
+    pages: list[list[str]] = []
+    current = [f'{exam["id"]} — {exam["name"]}', 'Question Bank', '']
+    line_limit = 48
+    def add_line(line: str = ''):
+        nonlocal current
+        if len(current) >= line_limit:
+            pages.append(current)
+            current = []
+        current.append(line)
+    for i, row in enumerate(questions, 1):
+        add_line(f'{i}. {row["question_text"]}')
+        choices = json.loads(row['choices_json'])
+        for idx, choice in enumerate(choices[:4]):
+            letter = chr(65 + idx)
+            for n, part in enumerate(wrap_pdf_text(f'{letter}. {choice}', 88)):
+                add_line(('   ' if n else '') + part)
+        add_line('')
+    if current:
+        pages.append(current)
+    answer_page = ['Answer Key', '']
+    for i, row in enumerate(questions, 1):
+        choices = json.loads(row['choices_json'])
+        correct = row['correct_choice']
+        idx = ord(correct) - 65
+        correct_text = choices[idx] if 0 <= idx < len(choices) else ''
+        answer_page.extend(wrap_pdf_text(f'{i}. {correct}. {correct_text}', 96))
+        answer_page.extend('   ' + line for line in wrap_pdf_text(f'Explanation: {row["explanation"]}', 92))
+        answer_page.append('')
+        if len(answer_page) >= line_limit:
+            pages.append(answer_page)
+            answer_page = ['Answer Key continued', '']
+    if answer_page:
+        pages.append(answer_page)
+
+    objects: list[bytes] = []
+    def add_obj(data: bytes) -> int:
+        objects.append(data)
+        return len(objects)
+    font_id = add_obj(b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
+    page_ids: list[int] = []
+    content_ids: list[int] = []
+    for page_no, lines in enumerate(pages, 1):
+        ops = ['BT', '/F1 10 Tf', '50 760 Td', '14 TL']
+        for line in lines:
+            ops.append(f'({pdf_escape(line)}) Tj')
+            ops.append('T*')
+        ops.extend(['ET', f'BT /F1 8 Tf 50 24 Td (Page {page_no} of {len(pages)}) Tj ET'])
+        stream = '\n'.join(ops).encode('latin-1', 'replace')
+        content_ids.append(add_obj(b'<< /Length ' + str(len(stream)).encode() + b' >>\nstream\n' + stream + b'\nendstream'))
+    pages_id_guess = len(objects) + len(content_ids) + 1
+    for content_id in content_ids:
+        page_ids.append(add_obj(f'<< /Type /Page /Parent {pages_id_guess} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>'.encode()))
+    kids = ' '.join(f'{pid} 0 R' for pid in page_ids)
+    pages_id = add_obj(f'<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>'.encode())
+    if pages_id != pages_id_guess:
+        for pid in page_ids:
+            objects[pid-1] = objects[pid-1].replace(f'/Parent {pages_id_guess} 0 R'.encode(), f'/Parent {pages_id} 0 R'.encode())
+    catalog_id = add_obj(f'<< /Type /Catalog /Pages {pages_id} 0 R >>'.encode())
+    out = io.BytesIO()
+    out.write(b'%PDF-1.4\n')
+    offsets = [0]
+    for i, obj in enumerate(objects, 1):
+        offsets.append(out.tell())
+        out.write(f'{i} 0 obj\n'.encode())
+        out.write(obj)
+        out.write(b'\nendobj\n')
+    xref = out.tell()
+    out.write(f'xref\n0 {len(objects)+1}\n0000000000 65535 f \n'.encode())
+    for off in offsets[1:]:
+        out.write(f'{off:010d} 00000 n \n'.encode())
+    out.write(f'trailer << /Size {len(objects)+1} /Root {catalog_id} 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+    return out.getvalue()
+
+@app.get('/api/exams/{exam_id}/printable.pdf')
+def printable_pdf(exam_id: str):
+    with connect() as conn:
+        exam = conn.execute('SELECT * FROM exams WHERE id=?', (exam_id,)).fetchone()
+        if not exam:
+            raise HTTPException(404, 'Exam not found')
+        rows = conn.execute('''SELECT q.*, o.code objective_code, o.title objective_title
+            FROM questions q JOIN objectives o ON o.id=q.objective_id
+            WHERE q.exam_id=? AND q.active=1 AND q.verified=1
+            ORDER BY o.code, q.id''', (exam_id,)).fetchall()
+        pdf = build_question_bank_pdf(exam, rows)
+    headers = {'Content-Disposition': f'attachment; filename="{exam_id}-question-bank.pdf"'}
+    return StreamingResponse(io.BytesIO(pdf), media_type='application/pdf', headers=headers)
+
 @app.get('/api/exams/{exam_id}/queue')
-def queue(exam_id: str, limit: int = Query(10, ge=1, le=100), mode: str = 'practice', ids: Optional[str] = None):
-    order = 'RANDOM()' if mode == 'timed' else 'datetime(p.next_due) ASC, p.mastery ASC, q.difficulty DESC'
+def queue(exam_id: str, limit: int = Query(10, ge=1, le=100), mode: str = 'practice', ids: Optional[str] = None, objective: Optional[str] = None, wrong: bool = False):
+    order = 'RANDOM()' if mode in ('timed', 'certification') else 'datetime(p.next_due) ASC, p.mastery ASC, q.difficulty DESC'
     with connect() as conn:
         if ids:
             wanted = [int(x) for x in ids.split(',') if x.strip().isdigit()]
@@ -145,9 +254,17 @@ def queue(exam_id: str, limit: int = Query(10, ge=1, le=100), mode: str = 'pract
                 WHERE q.exam_id=? AND q.active=1 AND q.verified=1 AND q.id IN ({placeholders})
                 ORDER BY CASE q.id {' '.join(f'WHEN {qid} THEN {i}' for i, qid in enumerate(wanted))} END''', [exam_id, *wanted]).fetchall()
         else:
+            filters = ['q.exam_id=?', 'q.active=1', 'q.verified=1']
+            params: list[Any] = [exam_id]
+            if objective:
+                filters.append('o.code=?')
+                params.append(objective)
+            if wrong:
+                filters.append('p.wrong_count > 0')
+            params.append(limit)
             rows = conn.execute(f'''SELECT q.*, o.code objective_code, o.title objective_title, p.flagged, p.mastery
                 FROM questions q JOIN objectives o ON o.id=q.objective_id JOIN progress p ON p.question_id=q.id
-                WHERE q.exam_id=? AND q.active=1 AND q.verified=1 ORDER BY {order} LIMIT ?''', (exam_id, limit)).fetchall()
+                WHERE {' AND '.join(filters)} ORDER BY {order} LIMIT ?''', params).fetchall()
         return [serialize_question(r) for r in rows]
 
 @app.post('/api/answer')
