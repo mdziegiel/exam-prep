@@ -1,0 +1,14 @@
+services:
+  exam-prep:
+    build: .
+    container_name: exam-prep
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    env_file:
+      - .env
+    volumes:
+      - exam-prep-data:/data
+
+volumes:
+  exam-prep-data:

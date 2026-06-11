@@ -1,0 +1,10 @@
+node_modules
+dist
+__pycache__
+*.pyc
+.env
+*.sqlite
+*.sqlite-*
+.DS_Store
+.venv
+coverage
