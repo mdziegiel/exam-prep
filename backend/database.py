@@ -75,6 +75,16 @@ CREATE TABLE IF NOT EXISTS attempts (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS attempt_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id INTEGER NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
+    question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    selected_choice TEXT NOT NULL DEFAULT '',
+    is_correct INTEGER NOT NULL DEFAULT 0,
+    elapsed_seconds INTEGER NOT NULL DEFAULT 0,
+    flagged INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS refresh_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     exam_id TEXT,
@@ -86,6 +96,34 @@ CREATE TABLE IF NOT EXISTS refresh_runs (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
+
+QUESTION_COLUMNS = {
+    'question_type': "TEXT NOT NULL DEFAULT 'single'",
+    'correct_json': "TEXT DEFAULT ''",
+    'exhibit_json': "TEXT DEFAULT ''",
+    'references_json': "TEXT DEFAULT ''",
+}
+
+
+def _columns(conn, table):
+    return {row['name'] for row in conn.execute(f'PRAGMA table_info({table})')}
+
+
+def _migrate(conn):
+    cols = _columns(conn, 'questions')
+    for name, spec in QUESTION_COLUMNS.items():
+        if name not in cols:
+            conn.execute(f'ALTER TABLE questions ADD COLUMN {name} {spec}')
+    cols = _columns(conn, 'attempts')
+    if 'answers_json' not in cols:
+        conn.execute("ALTER TABLE attempts ADD COLUMN answers_json TEXT NOT NULL DEFAULT '[]'")
+    if 'config_json' not in cols:
+        conn.execute("ALTER TABLE attempts ADD COLUMN config_json TEXT NOT NULL DEFAULT '{}'")
+    conn.execute("UPDATE questions SET question_type='single' WHERE question_type IS NULL OR question_type='' ")
+    conn.execute("UPDATE questions SET correct_json=json_array(correct_choice) WHERE correct_json IS NULL OR correct_json='' ")
+    conn.execute("UPDATE questions SET references_json=json_array(json_object('title','Official documentation','url',source_url)) WHERE (references_json IS NULL OR references_json='') AND source_url IS NOT NULL AND source_url<>''")
+    conn.execute("UPDATE questions SET references_json=json_array(json_object('title','Microsoft Learn certification documentation','url','https://learn.microsoft.com/en-us/credentials/certifications/')) WHERE references_json IS NULL OR references_json='' ")
+
 
 @contextmanager
 def connect():
@@ -99,18 +137,26 @@ def connect():
     finally:
         conn.close()
 
+
 def init_db():
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
 
 def row_to_dict(row):
     if row is None:
         return None
     d = dict(row)
-    for key in ('choices_json', 'breakdown_json'):
+    for key in ('choices_json', 'breakdown_json', 'answers_json', 'config_json', 'correct_json', 'exhibit_json', 'references_json'):
         if key in d:
-            d[key.replace('_json', '')] = json.loads(d.pop(key))
+            raw = d.pop(key)
+            try:
+                d[key.replace('_json', '')] = json.loads(raw) if raw else ([] if key != 'config_json' else {})
+            except Exception:
+                d[key.replace('_json', '')] = [] if key != 'config_json' else {}
     return d
+
 
 def now_iso():
     return datetime.utcnow().isoformat(timespec='seconds') + 'Z'

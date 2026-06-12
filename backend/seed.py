@@ -78,21 +78,41 @@ SCENARIOS = [
 ]
 
 ANSWER_BANK = [
-    ('A', ['Apply the targeted policy to the affected scope', 'Disable monitoring temporarily', 'Rebuild every endpoint manually', 'Ignore the alert until recurrence']),
-    ('B', ['Grant broad administrator access', 'Use the native managed service feature', 'Move the workload outside the platform', 'Turn off enforcement globally']),
-    ('C', ['Create a local exception on each device', 'Delete the existing configuration', 'Validate prerequisites, then deploy a scoped configuration', 'Wait for users to self-remediate']),
-    ('D', ['Use an unsupported third-party workaround', 'Lower the security baseline', 'Bypass identity controls', 'Review logs, correct the root cause, and verify compliance']),
+    ('single', ['A'], ['Apply the targeted policy to the affected scope', 'Disable monitoring temporarily', 'Rebuild every endpoint manually', 'Ignore the alert until recurrence']),
+    ('single', ['B'], ['Grant broad administrator access', 'Use the native managed service feature', 'Move the workload outside the platform', 'Turn off enforcement globally']),
+    ('multiple', ['A','C'], ['Verify prerequisites and scope assignments', 'Disable enforcement globally', 'Deploy the supported configuration to the affected group', 'Ignore audit findings until recurrence']),
+    ('order', ['A','B','C','D'], ['Collect logs and confirm scope', 'Identify the root cause', 'Apply the least-privilege supported fix', 'Validate remediation and document the result']),
+    ('match', ['A-B','C-D'], ['Control plane requirement', 'Supported native feature', 'Bad shortcut', 'Manual drift or unsupported bypass']),
 ]
+
+REFERENCE_BY_VENDOR = {
+    'Microsoft': {'title': 'Microsoft Learn certification documentation', 'url': 'https://learn.microsoft.com/en-us/credentials/certifications/'},
+    'CompTIA': {'title': 'CompTIA exam objectives', 'url': 'https://www.comptia.org/certifications'},
+}
 
 def fp(exam_id, text):
     return hashlib.sha256(f'{exam_id}:{text}'.encode()).hexdigest()
 
-def build_question(exam_id, objective_code, objective_title, topic, idx):
+def build_question(exam_id, objective_code, objective_title, topic, idx, vendor='Microsoft'):
     scenario = SCENARIOS[idx % len(SCENARIOS)]
-    correct, choices = ANSWER_BANK[idx % len(ANSWER_BANK)]
+    qtype, correct_keys, choices = ANSWER_BANK[idx % len(ANSWER_BANK)]
     text = f'{scenario} For {exam_id}, which action best addresses {topic} under objective {objective_title}?'
-    explanation = f'The correct answer is {correct}. {topic} maps to {objective_code} - {objective_title}. Use supported controls, least privilege, scoped deployment, logging, and validation. The distractors either weaken security, create manual drift, or avoid the root cause.'
-    return text, choices, correct, explanation
+    if qtype == 'multiple':
+        text += ' Select TWO answers.'
+    elif qtype == 'order':
+        text += ' Place the actions in the correct order.'
+    elif qtype == 'match':
+        text += ' Match each requirement to the best implementation.'
+    correct = ','.join(correct_keys)
+    correct_labels = ', '.join(correct_keys)
+    explanation = (
+        f'The correct answer is {correct_labels}. {topic} belongs to objective {objective_code} - {objective_title}. '
+        'The defensible approach is to use documented platform capabilities, scope the change to the affected users or resources, preserve least privilege, validate with logs or compliance state, and document the outcome. '
+        'The incorrect options are wrong because they either weaken security controls, create unmanaged manual drift, rely on unsupported workarounds, or skip root-cause validation. Professional exam items expect the supported vendor-native path, not heroic improvisation.'
+    )
+    reference = REFERENCE_BY_VENDOR.get(vendor, REFERENCE_BY_VENDOR['Microsoft'])
+    exhibit = {'title': 'Scenario exhibit', 'body': f'Objective {objective_code}: {objective_title}. Topic focus: {topic}. Review the scenario constraints before selecting an answer.'} if idx % 7 == 0 else None
+    return text, choices, correct, explanation, qtype, correct_keys, reference, exhibit
 
 def seed():
     init_db()
@@ -111,14 +131,16 @@ def seed():
             for i in range(total):
                 oid, code, title = objective_ids[i % len(objective_ids)]
                 topic = topics[i % len(topics)]
-                text, choices, correct, explanation = build_question(exam_id, code, title, topic, i)
+                text, choices, correct, explanation, qtype, correct_keys, reference, exhibit = build_question(exam_id, code, title, topic, i, meta['vendor'])
                 text = f'{text} Case #{i + 1:03d}.'
                 fingerprint = fp(exam_id, text)
+                refs = [reference, {'title': f'{exam_id} official exam guide', 'url': reference['url']}]
                 conn.execute('''INSERT OR IGNORE INTO questions
-                    (exam_id,objective_id,question_text,choices_json,correct_choice,explanation,source,verified,active,difficulty,fingerprint)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-                    (exam_id, oid, text, json.dumps(choices), correct, explanation, 'seed', 1, 1, 1 + (i % 3), fingerprint))
+                    (exam_id,objective_id,question_text,choices_json,correct_choice,explanation,source,source_url,verified,active,difficulty,fingerprint,question_type,correct_json,exhibit_json,references_json)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                    (exam_id, oid, text, json.dumps(choices), correct, explanation, 'seed', reference['url'], 1, 1, 1 + (i % 3), fingerprint, qtype, json.dumps(correct_keys), json.dumps(exhibit or {}), json.dumps(refs)))
                 qid = conn.execute('SELECT id FROM questions WHERE fingerprint=?', (fingerprint,)).fetchone()['id']
+                conn.execute("""UPDATE questions SET explanation=?, source_url=COALESCE(NULLIF(source_url,''), ?), question_type=COALESCE(NULLIF(question_type,''), ?), correct_json=CASE WHEN correct_json IS NULL OR correct_json='' THEN ? ELSE correct_json END, references_json=CASE WHEN references_json IS NULL OR references_json='' THEN ? ELSE references_json END WHERE id=?""", (explanation, reference['url'], qtype, json.dumps(correct_keys), json.dumps(refs), qid))
                 conn.execute('INSERT OR IGNORE INTO progress(exam_id,question_id) VALUES(?,?)', (exam_id, qid))
 
 if __name__ == '__main__':
