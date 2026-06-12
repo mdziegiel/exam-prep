@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BarChart3, BookOpen, CheckCircle2, ChevronLeft, ChevronRight, Clock, Download, Eye, Flag, History, ListChecks, Pause, Play, Printer, RefreshCw, RotateCcw, Settings, ShieldCheck, Square, Trophy, ZoomIn, ZoomOut } from 'lucide-react'
+import { BarChart3, BookOpen, CheckCircle2, ChevronLeft, ChevronRight, Clock, Download, Eye, Flag, History, Info, ListChecks, Moon, Pause, Play, Printer, RefreshCw, RotateCcw, Settings, ShieldCheck, Square, Sun, Trophy, X, ZoomIn, ZoomOut } from 'lucide-react'
 import './index.css'
 
 const API = '/api'
@@ -27,18 +27,24 @@ function Shell() {
   const [exam, setExam] = useState('MD-102')
   const [sessionConfig, setSessionConfig] = useState(null)
   const [refresh, setRefresh] = useState(0)
+  const [theme, setTheme] = useSuiteTheme()
+  const [aboutOpen, setAboutOpen] = useState(false)
   useEffect(() => { api('/exams').then(setExams).catch(console.error) }, [refresh])
   const current = exams.find(e => e.id === exam) || exams[0]
   useEffect(() => { if (!exam && exams[0]) setExam(exams[0].id) }, [exams])
   const startSession = cfg => { setSessionConfig({ examId: exam, ...cfg }); setPage('session') }
   return <div className="min-h-screen">
-    <header className="sticky top-0 z-20 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+    <header className="sticky top-0 z-20 border-b border-white/10 bg-ink/80 backdrop-blur-xl suite-header">
+      <div className="mx-auto flex max-w-7xl items-start justify-between gap-4 px-6 py-4">
         <div><h1 className="text-2xl font-black tracking-tight">IT Exam Prep</h1><p className="text-sm text-slate-400">Professional certification simulator</p></div>
-        <nav className="flex flex-wrap gap-2">
-          {[['dashboard', 'Dashboard', BookOpen], ['history', 'History', History], ['admin', 'Admin', ShieldCheck]].map(([id, label, Icon]) => <button key={id} onClick={() => setPage(id)} className={`btn ${page === id ? 'btn-primary' : ''}`}><Icon className="mr-2 inline h-4 w-4" />{label}</button>)}
-        </nav>
+        <div className="header-actions">
+          <nav className="flex flex-wrap justify-end gap-2">
+            {[['dashboard', 'Dashboard', BookOpen], ['history', 'History', History], ['admin', 'Admin', ShieldCheck]].map(([id, label, Icon]) => <button key={id} onClick={() => setPage(id)} className={`btn ${page === id ? 'btn-primary' : ''}`}><Icon className="mr-2 inline h-4 w-4" />{label}</button>)}
+          </nav>
+          <SuiteIconBar theme={theme} setTheme={setTheme} setAboutOpen={setAboutOpen} repoUrl="https://github.com/mdziegiel/exam-prep" />
+        </div>
       </div>
+      {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} name="Exam Prep" version="1.0.0" description="Professional self-hosted IT certification simulator with exam modes, history, objective drills, printable PDFs, and admin refresh tooling." />}
     </header>
     <main className="mx-auto max-w-7xl px-6 py-8">
       {page === 'dashboard' && <Dashboard exams={exams} openExam={id => { setExam(id); setPage('exam-detail') }} />}
@@ -47,6 +53,32 @@ function Shell() {
       {page === 'history' && <HistoryPage />}
       {page === 'admin' && <AdminPage exams={exams} />}
     </main>
+  </div>
+}
+
+function useSuiteTheme() {
+  const [theme, setThemeState] = useState(() => localStorage.getItem('suite-theme') || 'dark')
+  useEffect(() => { document.body.classList.toggle('suite-light', theme === 'light'); localStorage.setItem('suite-theme', theme) }, [theme])
+  const setTheme = () => setThemeState(t => t === 'dark' ? 'light' : 'dark')
+  return [theme, setTheme]
+}
+function GithubMark() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.03c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.3.76-1.6-2.67-.31-5.47-1.34-5.47-5.94 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.53.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.65.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.8 5.63-5.48 5.93.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57A12 12 0 0 0 12 .5Z" /></svg> }
+function SuiteIconBar({ theme, setTheme, setAboutOpen, repoUrl }) {
+  return <div className="suite-iconbar" aria-label="Application links">
+    <a className="suite-icon" href={repoUrl} target="_blank" rel="noreferrer" aria-label="GitHub repository" title="GitHub"><GithubMark /></a>
+    <button className="suite-icon" type="button" onClick={() => setAboutOpen(true)} aria-label="About" title="About"><Info /></button>
+    <button className="suite-icon" type="button" onClick={setTheme} aria-label="Toggle theme" title="Toggle theme">{theme === 'dark' ? <Sun /> : <Moon />}</button>
+  </div>
+}
+function AboutModal({ name, version, description, onClose }) {
+  return <div className="suite-modal-backdrop" role="dialog" aria-modal="true" aria-label={`About ${name}`} onClick={onClose}>
+    <div className="suite-modal" onClick={e => e.stopPropagation()}>
+      <button className="suite-modal-close" type="button" onClick={onClose} aria-label="Close"><X /></button>
+      <div className="suite-modal-kicker">About</div>
+      <h2>{name}</h2>
+      <p className="suite-modal-version">Version {version}</p>
+      <p>{description}</p>
+    </div>
   </div>
 }
 
