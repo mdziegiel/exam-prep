@@ -4,9 +4,11 @@ from database import connect, init_db
 
 EXAMS = {
     'MD-102': {
-        'name': 'Microsoft Endpoint Administrator', 'vendor': 'Microsoft', 'passing_score': 70, 'seed_count': 320,
-        'description': 'Endpoint management with Intune, Entra ID, Windows, compliance, and security.',
-        'objectives': [('1.1', 'Deploy Windows client', 25), ('1.2', 'Manage identity and compliance', 25), ('1.3', 'Manage, maintain, and protect devices', 30), ('1.4', 'Manage applications', 20)]
+        'name': 'Microsoft Endpoint Administrator', 'vendor': 'Microsoft', 'passing_score': 70, 'seed_count': 0,
+        'description': 'Endpoint administration with Microsoft Intune, Microsoft Entra ID, Windows, Microsoft 365 Apps, and endpoint security aligned to the current MD-102 objectives.',
+        # MD-102 is maintained by the Claude regeneration script from the official Microsoft Learn study guide.
+        # Do not regenerate the old placeholder seed pool on startup.
+        'objectives': [('1.0', 'Prepare infrastructure for devices', 28), ('2.0', 'Manage and maintain devices', 33), ('3.0', 'Manage applications', 20), ('4.0', 'Protect devices', 20)]
     },
     'AZ-104': {
         'name': 'Azure Administrator Associate', 'vendor': 'Microsoft', 'passing_score': 70, 'seed_count': 320,
