@@ -14,9 +14,11 @@ EXAMS = {
         'objectives': [('2.1', 'Manage Azure identities and governance', 20), ('2.2', 'Implement and manage storage', 15), ('2.3', 'Deploy and manage Azure compute resources', 25), ('2.4', 'Implement virtual networking', 25), ('2.5', 'Monitor and maintain Azure resources', 15)]
     },
     'N10-009': {
-        'name': 'CompTIA Network+ N10-009', 'vendor': 'CompTIA', 'passing_score': 80, 'seed_count': 320,
+        'name': 'CompTIA Network+ N10-009', 'vendor': 'CompTIA', 'passing_score': 80, 'seed_count': 0,
         'description': 'Networking fundamentals, implementation, operations, security, and troubleshooting.',
-        'objectives': [('3.1', 'Networking concepts', 23), ('3.2', 'Network implementation', 20), ('3.3', 'Network operations', 19), ('3.4', 'Network security', 14), ('3.5', 'Network troubleshooting', 24)]
+        # N10-009 is maintained by the rebuild script from official objectives and ExamCompass scrape.
+        # Do not regenerate the old placeholder seed pool on startup.
+        'objectives': [('1.0', 'Networking Concepts', 23), ('2.0', 'Network Implementation', 20), ('3.0', 'Network Operations', 17), ('4.0', 'Network Security', 20), ('5.0', 'Network Troubleshooting', 20)]
     },
     '220-1101': {
         'name': 'CompTIA A+ Core 1', 'vendor': 'CompTIA', 'passing_score': 75, 'seed_count': 60,
@@ -118,8 +120,12 @@ def seed():
     init_db()
     with connect() as conn:
         for exam_id, meta in EXAMS.items():
-            conn.execute('INSERT OR REPLACE INTO exams(id,name,vendor,duration_minutes,passing_score,description) VALUES(?,?,?,?,?,?)',
+            # Avoid INSERT OR REPLACE here. In SQLite, REPLACE deletes the parent exam row first,
+            # which cascades and destroys questions for rebuilt pools such as N10-009.
+            conn.execute('INSERT OR IGNORE INTO exams(id,name,vendor,duration_minutes,passing_score,description) VALUES(?,?,?,?,?,?)',
                          (exam_id, meta['name'], meta['vendor'], 90, meta['passing_score'], meta['description']))
+            conn.execute('UPDATE exams SET name=?, vendor=?, duration_minutes=?, passing_score=?, description=? WHERE id=?',
+                         (meta['name'], meta['vendor'], 90, meta['passing_score'], meta['description'], exam_id))
             objective_ids = []
             for code, title, weight in meta['objectives']:
                 conn.execute('INSERT OR IGNORE INTO objectives(exam_id,code,title,weight) VALUES(?,?,?,?)', (exam_id, code, title, weight))
